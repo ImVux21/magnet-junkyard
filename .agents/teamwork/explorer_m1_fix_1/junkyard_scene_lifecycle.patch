@@ -1,0 +1,144 @@
+--- a/src/scenes/JunkyardScene.ts
++++ b/src/scenes/JunkyardScene.ts
+@@ -36,2 +36,7 @@ export class JunkyardScene extends Phaser.Scene {
+   public destructibleCrates: DestructibleCrate[] = [];
++
++  // Event Unsubscribe & Cleanup Handles
++  private challengeUnsubscribe?: () => void;
++  private achievementUnsubscribe?: () => void;
++  private comboUnsubscribes: (() => void)[] = [];
+
+@@ -96,2 +101,6 @@ export class JunkyardScene extends Phaser.Scene {
+   create(): void {
++    // Hook Phaser 3 Scene shutdown lifecycle event
++    this.events.off('shutdown', this.shutdown, this);
++    this.events.on('shutdown', this.shutdown, this);
++
+     this.audioService = ProceduralAudioService.getInstance();
+@@ -126,2 +135,6 @@ export class JunkyardScene extends Phaser.Scene {
+     // Wire Challenge & Achievement Listeners
++    if (this.challengeUnsubscribe) {
++      this.challengeUnsubscribe();
++    }
+     this.challengeManager.on((state, completed) => {
+@@ -137,2 +150,5 @@ export class JunkyardScene extends Phaser.Scene {
++    if (this.achievementUnsubscribe) {
++      this.achievementUnsubscribe();
++    }
+     this.achievementManager.on((ach, reward) => {
+@@ -146,2 +162,3 @@ export class JunkyardScene extends Phaser.Scene {
+     // Wire Hazard achievement trigger listener
+-    this.events.on('achievement-trigger', (id: string) => {
+-      this.achievementManager.unlock(id);
+-      if (id === 'critter_repelled') this.crittersRepelled++;
+-      if (id === 'emp_survivor') this.empMineHits++;
+-      this.saveGameState();
+-    });
++    this.events.off('achievement-trigger', this.handleAchievementTrigger, this);
++    this.events.on('achievement-trigger', this.handleAchievementTrigger, this);
+@@ -194,2 +211,8 @@ export class JunkyardScene extends Phaser.Scene {
+     // 9. Wire Combo & Fever Mode State Machine
++    for (const unsub of this.comboUnsubscribes) {
++      unsub();
++    }
++    this.comboUnsubscribes = [];
++
++    this.comboUnsubscribes.push(
+     this.comboManager.on('fever-started', (state) => {
+@@ -230,2 +253,3 @@ export class JunkyardScene extends Phaser.Scene {
+     });
++    );
+
+@@ -1100,6 +1124,12 @@ export class JunkyardScene extends Phaser.Scene {
+       settings: {
+-        sfxVolume: 0.8,
+-        musicVolume: 0.6,
+-        touchControls: true,
+-        hapticFeedback: true,
++        ...(SaveManager.getInstance().load().settings || {
++          sfxVolume: 0.8,
++          musicVolume: 0.6,
++          touchControls: true,
++          hapticFeedback: true,
++        }),
+         screenShake: this.screenShakeEnabled,
+       },
+
+@@ -1142,32 +1172,66 @@ export class JunkyardScene extends Phaser.Scene {
++  private handleAchievementTrigger(id: string): void {
++    this.achievementManager.unlock(id);
++    if (id === 'critter_repelled') this.crittersRepelled++;
++    if (id === 'emp_survivor') this.empMineHits++;
++    this.saveGameState();
++  }
++
+   public shutdown(): void {
++    // 1. Unhook shutdown event
++    this.events.off('shutdown', this.shutdown, this);
++
++    // 2. Unhook manager and cross-scene listeners to prevent accumulation on restart
++    if (this.challengeUnsubscribe) {
++      this.challengeUnsubscribe();
++      this.challengeUnsubscribe = undefined;
++    }
++    if (this.achievementUnsubscribe) {
++      this.achievementUnsubscribe();
++      this.achievementUnsubscribe = undefined;
++    }
++    for (const unsub of this.comboUnsubscribes) {
++      unsub();
++    }
++    this.comboUnsubscribes = [];
++    this.events.off('achievement-trigger', this.handleAchievementTrigger, this);
++
++    // 3. Timers cleanup
+     if (this.respawnTimer) {
+       this.respawnTimer.destroy();
++      this.respawnTimer = null as any;
+     }
++    if (this.time) {
++      this.time.removeAllEvents();
++    }
++
++    // 4. Scrap pool cleanup
+     if (this.scrapPool) {
+       this.scrapPool.destroy();
++      this.scrapPool = null as any;
+     }
++
++    // 5. Particle emitters cleanup & nulling to prevent stale reference access
+     if (this.sparkEmitter) {
+       this.sparkEmitter.destroy();
++      this.sparkEmitter = null as any;
+     }
+     if (this.pulseSparkEmitter) {
+       this.pulseSparkEmitter.destroy();
++      this.pulseSparkEmitter = null as any;
+     }
+     if (this.crateDebrisEmitter) {
+       this.crateDebrisEmitter.destroy();
++      this.crateDebrisEmitter = null as any;
+     }
+     if (this.roverDustEmitter) {
+       this.roverDustEmitter.destroy();
++      this.roverDustEmitter = null as any;
+     }
+     if (this.recyclerSteamEmitter) {
+       this.recyclerSteamEmitter.destroy();
++      this.recyclerSteamEmitter = null as any;
+     }
++
++    // 6. Destructible crates and active 45s respawn timers cleanup
+     if (this.destructibleCrates) {
+       for (const crate of this.destructibleCrates) {
+         crate.destroy();
+       }
+       this.destructibleCrates = [];
+     }
++
++    // 7. Reset combo state and audio
+     this.comboManager.reset();
+     if (this.audioService) {
+       this.audioService.stopAll();
+     }
+   }
